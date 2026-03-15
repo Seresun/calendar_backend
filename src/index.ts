@@ -9,9 +9,15 @@ dotenv.config();
 
 const app = express();
 
+const allowedOrigins = [
+  'http://localhost:5173',
+  'https://calendar-frontend-opal.vercel.app',
+];
+
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN || '*',
+    origin: allowedOrigins,
+    credentials: true,
   }),
 );
 app.use(express.json());
@@ -23,20 +29,43 @@ app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok' });
 });
 
+type AppError = {
+  statusCode?: number;
+  code?: string;
+  message?: string;
+};
+
+function isAppError(err: unknown): err is AppError {
+  return typeof err === 'object' && err !== null;
+}
+
 app.use(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  (err: any, _req: Request, res: Response, _next: NextFunction) => {
-    // eslint-disable-next-line no-console
+  (err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     console.error('Unhandled error:', err);
 
+    const fallbackStatus = 500;
+
     const statusCode =
-      typeof err.statusCode === 'number' && err.statusCode >= 400
+      isAppError(err) &&
+      typeof err.statusCode === 'number' &&
+      err.statusCode >= 400
         ? err.statusCode
-        : 500;
+        : fallbackStatus;
+
+    const message =
+      isAppError(err) && typeof err.message === 'string'
+        ? err.message
+        : 'Internal server error';
+
+    const code =
+      isAppError(err) && typeof err.code === 'string'
+        ? err.code
+        : 'INTERNAL_ERROR';
 
     res.status(statusCode).json({
-      message: err.message || 'Internal server error',
-      code: err.code || 'INTERNAL_ERROR',
+      message,
+      code,
     });
   },
 );
@@ -47,16 +76,15 @@ async function start() {
   await connectDb();
 
   const server = app.listen(PORT, () => {
-    // eslint-disable-next-line no-console
     console.log(`Server is running on port ${PORT}`);
   });
 
-  const shutdown = async () => {
-    // eslint-disable-next-line no-console
+  const shutdown = () => {
     console.log('Shutting down server...');
-    server.close(async () => {
-      await disconnectDb();
-      process.exit(0);
+    server.close(() => {
+      void disconnectDb().finally(() => {
+        process.exit(0);
+      });
     });
   };
 
@@ -64,8 +92,7 @@ async function start() {
   process.on('SIGTERM', shutdown);
 }
 
-start().catch((error) => {
-  // eslint-disable-next-line no-console
+start().catch((error: unknown) => {
   console.error('Failed to start server:', error);
   process.exit(1);
 });
